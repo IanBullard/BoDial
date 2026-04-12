@@ -30,7 +30,6 @@ class DeviceMonitor {
     // everything so we can switch between transports as they come and go.
     private var knownDevices: [UInt64: IOHIDDevice] = [:]
     private var reportBuffer = [UInt8](repeating: 0, count: 64)
-    private var eventSource: CGEventSource?
 
     private(set) var isConnected = false
 
@@ -41,21 +40,29 @@ class DeviceMonitor {
     // e.g. BLE uses a different report ID / layout than USB. Then stay quiet.
     private var firstReportLogged = false
 
+    // Fractional accumulators used when scaling attributed scroll events in
+    // the tap. At low sensitivity the scaled delta can be sub-unit; rather
+    // than dropping it, we carry the remainder across events so small dial
+    // motions still eventually produce a whole-pixel/line of scroll.
+    private var pixelAccumY: Double = 0
+    private var pixelAccumX: Double = 0
+    private var lineAccumY: Double = 0
+    private var lineAccumX: Double = 0
+
     // Called when connection state changes (for UI updates).
     var onConnectionChanged: ((Bool) -> Void)?
 
-    // Scale factor: 0.0 to 1.0. Read from UserDefaults each report.
+    // Slider semantics: 100 means "pass the device's own events through
+    // unchanged" (×1.0), 1 means "a hundredth of what the device would do"
+    // (×0.01). No base multiplier — at 100% the user wants the dial's
+    // native feel, which the OS driver has already dialed in for us.
     var scaleFactor: Double {
         let stored = UserDefaults.standard.integer(forKey: "scrollScale")
-        let pct = stored > 0 ? stored : 5  // default 5%
+        let pct = stored > 0 ? stored : 5
         return Double(pct) / 100.0
     }
 
-    init() {
-        // Create a private event source for our injected events.
-        eventSource = CGEventSource(stateID: .privateState)
-        eventSource?.userData = kBoDial_EventMarker
-    }
+    init() { }
 
     func start() {
         log.notice("DeviceMonitor.start: creating HID manager")
@@ -239,6 +246,10 @@ class DeviceMonitor {
         self.device = device
         isConnected = true
         firstReportLogged = false  // re-log first report after a transport switch
+        // Drop any residual fractional line-delta from the previous transport
+        // so a switch doesn't produce a phantom line-tick later. Pixel
+        // accumulator is cleared on every event already.
+        lineAccumY = 0; lineAccumX = 0
         onConnectionChanged?(true)
     }
 
@@ -286,37 +297,55 @@ class DeviceMonitor {
         //   Bytes 3-4: horizontal pan (16-bit signed, little-endian)
         guard reportID == 3, length >= 5 else { return }
 
-        let rawWheel = Int16(report[1]) | (Int16(report[2]) << 8)
-        let rawHPan  = Int16(report[3]) | (Int16(report[4]) << 8)
-
-        guard rawWheel != 0 || rawHPan != 0 else { return }
-
-        let scale = scaleFactor
-        let scaledWheel = Double(rawWheel) * scale
-        let scaledHPan  = Double(rawHPan) * scale
-
-        injectScrollEvent(deltaY: scaledWheel, deltaX: scaledHPan)
+        // Scaling is applied in the EventTap via applyScaling(to:) — this
+        // function now only exists for the first-report diagnostic above.
+        // We intentionally don't parse/inject anything here; the OS driver
+        // has already produced a perfectly good scroll event that will flow
+        // through the tap for scaling.
     }
 
-    private func injectScrollEvent(deltaY: Double, deltaX: Double) {
-        // Create a pixel-precise continuous scroll event.
-        // Using our private event source marks it with kBoDial_EventMarker
-        // so the EventTap knows to pass it through.
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: eventSource,
-            units: .pixel,
-            wheelCount: 2,
-            wheel1: 0,
-            wheel2: 0,
-            wheel3: 0
-        ) else { return }
+    // Called from the event-tap callback for scroll events attributable to
+    // the dial. Multiplies pixel and line deltas by the current scale
+    // factor, carrying fractional remainders across events so low
+    // sensitivities still produce occasional whole-unit scroll.
+    //
+    // Returns the event argument unchanged (for convenience at the call
+    // site); mutation is in-place via the CGEvent field setters.
+    func applyScaling(to event: CGEvent) {
+        let scale = scaleFactor
+        if scale == 1.0 {
+            // 100%: pass-through. Preserve the device's own feel exactly.
+            return
+        }
 
-        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: deltaY)
-        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: deltaX)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: deltaY)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: deltaX)
-        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        let rawPixelY = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
+        let rawPixelX = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
+        let rawLineY  = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
+        let rawLineX  = event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
 
-        event.post(tap: .cghidEventTap)
+        pixelAccumY += rawPixelY * scale
+        pixelAccumX += rawPixelX * scale
+        lineAccumY  += Double(rawLineY) * scale
+        lineAccumX  += Double(rawLineX) * scale
+
+        // Pixel fields are Doubles, so we can emit the full scaled value and
+        // keep zero remainder. Line fields are integers — truncate toward
+        // zero and carry the fractional part into the next event.
+        let emitLineY = lineAccumY.rounded(.towardZero)
+        let emitLineX = lineAccumX.rounded(.towardZero)
+        lineAccumY -= emitLineY
+        lineAccumX -= emitLineX
+
+        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: pixelAccumY)
+        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: pixelAccumX)
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: pixelAccumY)
+        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: pixelAccumX)
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(emitLineY))
+        event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(emitLineX))
+
+        // Pixels are doubles so there's no rounding loss; clear the pixel
+        // accumulator after emitting.
+        pixelAccumY = 0
+        pixelAccumX = 0
     }
 }
