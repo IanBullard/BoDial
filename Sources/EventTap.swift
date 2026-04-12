@@ -11,6 +11,7 @@
 
 import CoreGraphics
 import Foundation
+import os
 
 class ScrollEventTap {
     fileprivate var machPort: CFMachPort?
@@ -22,6 +23,7 @@ class ScrollEventTap {
     }
 
     func start() -> Bool {
+        log.notice("EventTap.start: creating cghidEventTap for scrollWheel events")
         let eventMask: CGEventMask = (1 << CGEventType.scrollWheel.rawValue)
 
         let context = TapContext(tap: self, monitor: deviceMonitor!)
@@ -35,9 +37,7 @@ class ScrollEventTap {
             callback: scrollCallback,
             userInfo: contextPtr
         ) else {
-            print("[BoDial] ERROR: Failed to create event tap.")
-            print("         Grant Accessibility permission in:")
-            print("         System Settings > Privacy & Security > Accessibility")
+            log.error("Failed to create event tap — Accessibility permission may be missing")
             return false
         }
 
@@ -48,8 +48,31 @@ class ScrollEventTap {
         self.runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .defaultMode)
 
-        print("[BoDial] Event tap installed.")
+        log.notice("EventTap.start: tap installed")
         return true
+    }
+
+    func stop() {
+        guard machPort != nil else {
+            log.notice("EventTap.stop: already stopped")
+            return
+        }
+        log.notice("EventTap.stop: disabling and invalidating tap")
+        if let tap = machPort {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .defaultMode)
+        }
+        // CFMachPort is invalidated when its last reference drops; explicit invalidate
+        // ensures the kernel-side tap is torn down before the process exits, so a
+        // rapid relaunch doesn't race against a still-live tap.
+        if let tap = machPort {
+            CFMachPortInvalidate(tap)
+        }
+        runLoopSource = nil
+        machPort = nil
+        log.notice("EventTap.stop: tap torn down")
     }
 }
 
@@ -70,6 +93,8 @@ private func scrollCallback(
 ) -> Unmanaged<CGEvent>? {
 
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        let reason = type == .tapDisabledByTimeout ? "timeout" : "userInput"
+        log.notice("EventTap: tap disabled (\(reason, privacy: .public)), re-enabling")
         if let info = userInfo {
             let context = Unmanaged<TapContext>.fromOpaque(info).takeUnretainedValue()
             if let port = context.tap.machPort {

@@ -10,6 +10,13 @@ MIN_MACOS = 13.0
 
 SWIFTFLAGS = -O
 
+# Code signing identity. Override on the command line for release builds, e.g.:
+#   make CODESIGN_IDENTITY="Developer ID Application: Ian Bullard (TEAMID)"
+# Default is the local self-signed cert used for development. Using a named
+# identity (rather than ad-hoc "-") keeps the signature stable across rebuilds,
+# so TCC doesn't treat each build as a new app and churn Accessibility grants.
+CODESIGN_IDENTITY ?= BoDial
+
 .PHONY: all clean release dump_raw
 
 # Default: universal binary (Apple Silicon + Intel)
@@ -23,7 +30,8 @@ $(BUNDLE): $(SOURCES) Info.plist
 	lipo -create $(BUILD)/BoDial-arm64 $(BUILD)/BoDial-x86_64 -output $(BINARY)
 	@rm $(BUILD)/BoDial-arm64 $(BUILD)/BoDial-x86_64
 	@cp Info.plist $(BUNDLE)/Contents/
-	@codesign -f -s - $(BUNDLE)
+	@codesign -f -s "$(CODESIGN_IDENTITY)" $(BUNDLE)
+	@touch $(BUNDLE)
 	@echo "Built: $(BUNDLE) (universal)"
 
 clean:

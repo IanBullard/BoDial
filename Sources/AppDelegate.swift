@@ -9,6 +9,7 @@
 // which keeps the build simple and compatible with macOS 13+.
 
 import Cocoa
+import os
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -21,6 +22,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var valueLabel: NSTextField!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        log.notice("Startup: pid=\(ProcessInfo.processInfo.processIdentifier, privacy: .public)")
+        log.notice("Startup: bundlePath=\(Bundle.main.bundlePath, privacy: .public)")
+        log.notice("Startup: executablePath=\(Bundle.main.executablePath ?? "<nil>", privacy: .public)")
+
+        // Preflight both TCC grants before touching any HID or event-tap API.
+        // Doing this up front means the user sees one consolidated prompt
+        // instead of tripping over each gate in sequence across relaunches.
+        let status = Permissions.check()
+        if !status.bothGranted {
+            log.notice("Startup: missing permissions, presenting alert and exiting")
+            Permissions.presentMissingAlert(status)
+            NSApp.terminate(nil)
+            return
+        }
+        log.notice("Startup: all permissions granted, continuing")
+
         deviceMonitor = DeviceMonitor()
         eventTap = ScrollEventTap(deviceMonitor: deviceMonitor)
 
@@ -60,25 +77,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         deviceMonitor.start()
 
         // Start event tap (suppresses original BoDial scroll events).
+        // Preflight already confirmed Accessibility is granted, so a failure
+        // here is unexpected — surface it and bail rather than silently
+        // continuing without suppression.
         if !eventTap.start() {
+            log.error("eventTap.start() failed despite Accessibility being granted")
             let alert = NSAlert()
-            alert.messageText = "Accessibility Permission Required"
-            alert.informativeText = "BoDial needs Accessibility access to suppress the device's native scroll events and replace them with properly scaled ones.\n\nGrant permission in:\nSystem Settings > Privacy & Security > Accessibility"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Open System Settings")
+            alert.messageText = "BoDial failed to install its event tap"
+            alert.informativeText = "Accessibility is granted but CGEvent.tapCreate still failed. Check Console.app for BoDial log lines and file a bug."
+            alert.alertStyle = .critical
             alert.addButton(withTitle: "Quit")
-
-            let response = alert.runModal()
-            if response == .alertFirstButtonReturn {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
-            }
+            alert.runModal()
             NSApp.terminate(nil)
         }
 
         updateStatusDisplay()
-        print("[BoDial] Running. Look for the dial icon in the menu bar.")
+        log.notice("Running. Menu bar icon installed.")
     }
 
     // Builds the slider + label view embedded in the menu.
@@ -131,5 +145,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Explicit teardown ensures the CGEventTap and IOHIDManager are torn down
+        // before the process exits. Without this, a rapid relaunch can race against
+        // kernel-side cleanup and install a second tap on cghidEventTap.
+        // NOTE: not called on force-quit (SIGKILL) — zombie taps are still possible
+        // in that path, and a logout/login is the only recovery.
+        log.notice("Shutdown: beginning teardown")
+        eventTap?.stop()
+        deviceMonitor?.stop()
+        log.notice("Shutdown: complete")
     }
 }
