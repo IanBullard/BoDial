@@ -1,0 +1,17 @@
+# Build output
+build/
+
+# Claude Code
+.claude/
+
+# macOS
+.DS_Store
+
+# Xcode (in case someone opens files in Xcode)
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# Swift Package Manager (not used, but just in case)
+.build/
+Package.resolved
