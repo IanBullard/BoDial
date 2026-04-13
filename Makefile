@@ -3,7 +3,7 @@ SOURCES  = $(wildcard Sources/*.swift)
 BUILD    = build
 BUNDLE   = $(BUILD)/$(APP_NAME).app
 BINARY   = $(BUNDLE)/Contents/MacOS/$(APP_NAME)
-VERSION  = 0.1.0
+VERSION  = 0.9.0
 
 # Minimum macOS version — matches Info.plist
 MIN_MACOS = 13.0
