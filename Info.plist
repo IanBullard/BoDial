@@ -18,9 +18,10 @@
     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>BoDial</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-
     <!-- Menu bar only — no Dock icon -->
     <key>LSUIElement</key>
     <true/>
