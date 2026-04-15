@@ -150,7 +150,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func bringUpMenu(_ note: Notification) {
+        log.notice("bringUpMenu: notification received")
+        if let button = statusItem.button {
+            log.notice("bringUpMenu: button exists, calling performClick")
+            button.performClick(nil)
+        } else {
+            log.warning("bringUpMenu: statusItem.button is nil")
+        }
+    }
+
+    // Called by Launch Services when the user re-launches an already-running app
+    // (e.g. via Spotlight or Finder). For installed apps in /Applications, macOS
+    // won't start a second process — it calls this instead.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        log.notice("applicationShouldHandleReopen: popping menu")
         statusItem.button?.performClick(nil)
+        return false
     }
 
     @objc private func quitApp() {
