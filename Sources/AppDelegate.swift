@@ -73,6 +73,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem.menu = menu
 
+        // Listen for a second launch attempt so we can pop the menu open.
+        // This lets users access settings even when the icon is hidden.
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(bringUpMenu),
+            name: NSNotification.Name(bringUpNotificationName), object: nil)
+
         // Start device monitoring (reads raw HID, injects scaled events).
         deviceMonitor.start()
 
@@ -141,6 +147,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             statusMenuItem.title = "BoDial: Not connected"
         }
+    }
+
+    @objc private func bringUpMenu(_ note: Notification) {
+        statusItem.button?.performClick(nil)
     }
 
     @objc private func quitApp() {

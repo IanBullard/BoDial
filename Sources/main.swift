@@ -7,14 +7,22 @@
 import Cocoa
 import os
 
-// Single-instance guard. If another BoDial is already running, exit immediately.
+// Distributed notification name used to signal the running instance to show its menu.
+// Declared at file scope so it's visible to AppDelegate without import.
+let bringUpNotificationName = "com.ibullard.BoDial.bringUpMenu"
+
+// Single-instance guard. If another BoDial is already running, signal it to show
+// its menu (so the user can access settings even when the icon is hidden) and exit.
 // Prevents duplicate event taps on cghidEventTap, which produce "confused filtering"
 // where the second instance's tap sees events the first has already suppressed.
 let myBundleID = Bundle.main.bundleIdentifier ?? "com.ibullard.BoDial"
 let others = NSRunningApplication.runningApplications(withBundleIdentifier: myBundleID)
     .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
 if !others.isEmpty {
-    log.notice("Already running (pid \(others[0].processIdentifier, privacy: .public)). Exiting.")
+    log.notice("Already running (pid \(others[0].processIdentifier, privacy: .public)). Signaling bring-up and exiting.")
+    DistributedNotificationCenter.default().postNotificationName(
+        NSNotification.Name(bringUpNotificationName),
+        object: nil, userInfo: nil, deliverImmediately: true)
     exit(0)
 }
 
