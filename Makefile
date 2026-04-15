@@ -31,7 +31,7 @@ DEVID_IDENTITY ?= Developer ID Application: Ian Bullard (E6UHUF3KD3)
 # Default: universal binary (Apple Silicon + Intel)
 all: $(BUNDLE)
 
-$(BUNDLE): $(SOURCES) Info.plist
+$(BUNDLE): $(SOURCES) Info.plist Resources/$(APP_NAME).icns
 	@mkdir -p $(BUNDLE)/Contents/MacOS
 	@mkdir -p $(BUNDLE)/Contents/Resources
 	swiftc $(SWIFTFLAGS) -target arm64-apple-macos$(MIN_MACOS) $(SOURCES) -o $(BUILD)/BoDial-arm64
@@ -39,6 +39,7 @@ $(BUNDLE): $(SOURCES) Info.plist
 	lipo -create $(BUILD)/BoDial-arm64 $(BUILD)/BoDial-x86_64 -output $(BINARY)
 	@rm $(BUILD)/BoDial-arm64 $(BUILD)/BoDial-x86_64
 	@cp Info.plist $(BUNDLE)/Contents/
+	@cp Resources/$(APP_NAME).icns $(BUNDLE)/Contents/Resources/
 	@codesign -f -s "$(CODESIGN_IDENTITY)" $(CODESIGN_OPTS) $(BUNDLE)
 	@touch $(BUNDLE)
 	@echo "Built: $(BUNDLE) (universal, signed as $(CODESIGN_IDENTITY))"
