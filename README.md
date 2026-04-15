@@ -49,6 +49,18 @@ This produces `build/BoDial.app`. To create a distributable zip:
 make release
 ```
 
+### Code signing
+
+BoDial requires Accessibility and Input Monitoring permissions, which are managed by macOS's TCC (Transparency, Consent, and Control) subsystem. TCC identifies apps by their code signature — without one, it has nothing to match a permission grant against. An unsigned `.app` will appear in System Settings → Privacy & Security, and you can toggle the permission on, but it never actually takes effect: the app will keep prompting on every launch.
+
+The Makefile signs the app as part of every build (the build will fail if the signing identity is missing). It defaults to a self-signed certificate named `BoDial`. Create it once in Keychain Access:
+
+1. Open **Keychain Access** → **Certificate Assistant** → **Create a Certificate…**
+2. Name: `BoDial`, Identity Type: **Self-Signed Root**, Certificate Type: **Code Signing**
+3. Click **Create**
+
+After that, `make` will sign the app automatically. Using a stable named certificate (rather than ad-hoc signing with `make CODESIGN_IDENTITY="-"`) keeps the signature consistent across rebuilds, so TCC continues to recognize the app and you won't have to re-grant permissions each time.
+
 ## Usage
 
 - Launch `BoDial.app` — a dial icon appears in the menu bar
