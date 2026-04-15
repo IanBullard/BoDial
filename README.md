@@ -53,7 +53,7 @@ make release
 
 BoDial requires Accessibility and Input Monitoring permissions, which are managed by macOS's TCC (Transparency, Consent, and Control) subsystem. TCC identifies apps by their code signature — without one, it has nothing to match a permission grant against. An unsigned `.app` will appear in System Settings → Privacy & Security, and you can toggle the permission on, but it never actually takes effect: the app will keep prompting on every launch.
 
-The Makefile signs the app as part of every build (the build will fail if the signing identity is missing). It defaults to a self-signed certificate named `BoDial`. Create it once in Keychain Access:
+The Makefile signs the app as the last build step. If the signing identity is missing, `make` will error out — but the unsigned `.app` bundle is already on disk and launchable, which is misleading because its permissions will silently fail as described above. To avoid this, create a self-signed certificate named `BoDial` (the Makefile default) once in Keychain Access:
 
 1. Open **Keychain Access** → **Certificate Assistant** → **Create a Certificate…**
 2. Name: `BoDial`, Identity Type: **Self-Signed Root**, Certificate Type: **Code Signing**
