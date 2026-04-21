@@ -25,11 +25,9 @@
     <key>LSUIElement</key>
     <true/>
 
-    <!-- TCC usage strings. Shown in the system permission prompts and in
-         System Settings. Required or the prompts are generic/unreliable. -->
+    <!-- TCC usage string. Shown in the Input Monitoring prompt and in
+         System Settings. Required or the prompt is generic/unreliable. -->
     <key>NSInputMonitoringUsageDescription</key>
-    <string>BoDial reads raw HID reports from the Engineer Bo Scroll Dial to rescale its scroll output.</string>
-    <key>NSAccessibilityUsageDescription</key>
-    <string>BoDial suppresses the dial's original scroll events so it can inject properly scaled replacements.</string>
+    <string>BoDial reads HID reports from the Scroll Dial to reshape its scroll output into smooth per-pixel scrolling.</string>
 </dict>
 </plist>

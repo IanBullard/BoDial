@@ -1,8 +1,14 @@
-// DeviceMonitor.swift — Reads raw HID reports from the BoDial and injects scaled scroll events.
+// DeviceMonitor.swift — Seizes the BoDial and synthesizes scroll events.
 //
-// Opens the device (non-exclusively) to receive raw input reports. When
-// rotation data arrives (Report ID 3), we scale it and post a synthetic
-// CGEvent with a marker so the EventTap knows not to suppress it.
+// Opens the device with kIOHIDOptionsTypeSeizeDevice, so the OS HID driver
+// stops generating scroll CGEvents from it. We parse raw HID reports
+// (Report ID 3: bytes 1-2 wheel, bytes 3-4 horizontal pan, both signed
+// 16-bit little-endian), scale by the sensitivity factor with a sub-pixel
+// accumulator, and post pixel-unit scroll CGEvents directly at the
+// session tap point.
+//
+// When BoDial exits (clean or crash), the Mach ports are released and
+// the OS driver resumes — the dial reverts to its stock behavior.
 
 import Foundation
 import IOKit
@@ -12,13 +18,6 @@ import os
 
 let kBoDial_VID: Int = 0xFEED
 let kBoDial_PID: Int = 0xBEEF
-
-// Magic value set on our injected events so the EventTap can identify them.
-let kBoDial_EventMarker: Int64 = 0xB0D1A1
-
-// How many nanoseconds after a BoDial HID report do we attribute a scroll
-// event to the BoDial. 10ms is generous — the real gap is typically <1ms.
-let kAttributionWindowNs: UInt64 = 10_000_000
 
 class DeviceMonitor {
     private var manager: IOHIDManager?
@@ -33,29 +32,24 @@ class DeviceMonitor {
 
     private(set) var isConnected = false
 
-    // Mach absolute time of the last HID report from the BoDial.
-    private(set) var lastReportTime: UInt64 = 0
-
     // One-shot diagnostic: log the first report we see so we can tell whether
     // e.g. BLE uses a different report ID / layout than USB. Then stay quiet.
     private var firstReportLogged = false
 
-    // Fractional accumulators used when scaling attributed scroll events in
-    // the tap. At low sensitivity the scaled delta can be sub-unit; rather
-    // than dropping it, we carry the remainder across events so small dial
-    // motions still eventually produce a whole-pixel/line of scroll.
+    // Sub-pixel accumulator. We scale raw HID tick counts by the sensitivity
+    // factor and round toward zero for the emitted event, carrying the
+    // fractional remainder across reports. Without this, low sensitivity
+    // rounds every individual tick to zero and the dial feels dead until
+    // the user spins fast enough that the scaled delta crosses 1 pixel.
     private var pixelAccumY: Double = 0
     private var pixelAccumX: Double = 0
-    private var lineAccumY: Double = 0
-    private var lineAccumX: Double = 0
 
     // Called when connection state changes (for UI updates).
     var onConnectionChanged: ((Bool) -> Void)?
 
-    // Slider semantics: 100 means "pass the device's own events through
-    // unchanged" (×1.0), 1 means "a hundredth of what the device would do"
-    // (×0.01). No base multiplier — at 100% the user wants the dial's
-    // native feel, which the OS driver has already dialed in for us.
+    // Slider semantics: pixels per raw HID tick = scaleFactor. 100 means
+    // 1 tick → 1 px, 50 means 1 tick → 0.5 px (accumulator emits a whole
+    // pixel every ~2 ticks), 1 means 1 tick → 0.01 px (~100 ticks per px).
     var scaleFactor: Double {
         let stored = UserDefaults.standard.integer(forKey: "scrollScale")
         let pct = stored > 0 ? stored : 5
@@ -90,9 +84,9 @@ class DeviceMonitor {
         }, refSelf)
 
         IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-        log.notice("DeviceMonitor.start: scheduled on runloop, opening...")
+        log.notice("DeviceMonitor.start: scheduled on runloop, opening (seize)...")
 
-        let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
         let hex = String(format: "0x%08x", UInt32(bitPattern: openResult))
         if openResult == kIOReturnSuccess {
             log.notice("DeviceMonitor.start: IOHIDManagerOpen OK (\(hex, privacy: .public))")
@@ -122,20 +116,6 @@ class DeviceMonitor {
         } else {
             log.notice("DeviceMonitor.start: IOHIDManagerCopyDevices returned nil")
         }
-    }
-
-    // Returns true if a BoDial HID report arrived within the attribution window.
-    func recentlyReceivedReport() -> Bool {
-        guard isConnected, lastReportTime > 0 else { return false }
-
-        var timebaseInfo = mach_timebase_info_data_t()
-        mach_timebase_info(&timebaseInfo)
-
-        let now = mach_absolute_time()
-        let elapsedTicks = now - lastReportTime
-        let elapsedNs = elapsedTicks * UInt64(timebaseInfo.numer) / UInt64(timebaseInfo.denom)
-
-        return elapsedNs < kAttributionWindowNs
     }
 
     // Transport preference: higher wins. USB > BLE > anything else.
@@ -173,20 +153,13 @@ class DeviceMonitor {
         knownDevices[id] = device
         log.notice("Device appeared: \(self.describe(device), privacy: .public) (known=\(self.knownDevices.count, privacy: .public))")
 
-        // Register a report callback on EVERY matching device, not just the
-        // active one. Reports from inactive transports still generate scroll
-        // events in the OS; we need `lastReportTime` to move forward when
-        // any of them fire so the EventTap suppresses those originals too.
-        // Only the active device's reports produce our scaled replacement
-        // (see handleReport gating below).
+        // Register a report callback on EVERY matching device. Only the
+        // active device actually gets synthesized events; see handleReport.
         let refSelf = Unmanaged.passUnretained(self).toOpaque()
         IOHIDDeviceRegisterInputReportCallback(
             device, &reportBuffer, reportBuffer.count,
             { context, result, sender, type, reportID, report, length in
                 let monitor = Unmanaged<DeviceMonitor>.fromOpaque(context!).takeUnretainedValue()
-                monitor.lastReportTime = mach_absolute_time()
-
-                // Only inject for reports from the active device.
                 guard let sender = sender else { return }
                 let senderDev = Unmanaged<IOHIDDevice>.fromOpaque(sender).takeUnretainedValue()
                 if senderDev === monitor.device {
@@ -213,8 +186,6 @@ class DeviceMonitor {
         let best = knownDevices.values.max(by: { transportRank($0) < transportRank($1) })
 
         if best === device {
-            // No change in selection — but update connected state in case
-            // `device` is nil now (e.g. last device just disappeared).
             let connected = (device != nil)
             if connected != isConnected {
                 isConnected = connected
@@ -223,12 +194,10 @@ class DeviceMonitor {
             return
         }
 
-        // Detach whatever we had.
         if device != nil {
             detachDevice()
         }
 
-        // Attach the new best, if any.
         if let next = best {
             log.notice("Selecting device: \(self.describe(next), privacy: .public)")
             attach(next)
@@ -240,31 +209,21 @@ class DeviceMonitor {
     }
 
     private func attach(_ device: IOHIDDevice) {
-        // Report callback was already installed in deviceConnected for every
-        // known device. Making a device "active" is just a state flip — the
-        // callback itself gates inject-vs-just-timestamp on `device ===`.
         self.device = device
         isConnected = true
         firstReportLogged = false  // re-log first report after a transport switch
-        // Drop any residual fractional line-delta from the previous transport
-        // so a switch doesn't produce a phantom line-tick later. Pixel
-        // accumulator is cleared on every event already.
-        lineAccumY = 0; lineAccumX = 0
+        // Drop any residual sub-pixel remainder from the previous transport
+        // so a switch doesn't emit a phantom pixel later.
+        pixelAccumY = 0; pixelAccumX = 0
         onConnectionChanged?(true)
     }
 
     private func detachDevice() {
-        // Note: we deliberately do NOT unregister the input-report callback
-        // here. Inactive devices must keep calling us back so lastReportTime
-        // advances when the OS generates a scroll event from their reports,
-        // letting the EventTap suppress those too. The callback gates on
-        // `device ===` to decide whether to inject.
         if let d = device {
             log.notice("Detached: \(self.describe(d), privacy: .public)")
         }
         device = nil
         isConnected = false
-        lastReportTime = 0
     }
 
     func stop() {
@@ -282,6 +241,8 @@ class DeviceMonitor {
         log.notice("DeviceMonitor.stop: HID manager closed")
     }
 
+    // Parse a HID input report from the active device and emit a scaled
+    // pixel-unit scroll CGEvent. Only Report ID 3 carries scroll data.
     private func handleReport(reportID: UInt32, report: UnsafeMutablePointer<UInt8>, length: Int) {
         if !firstReportLogged {
             firstReportLogged = true
@@ -291,61 +252,54 @@ class DeviceMonitor {
             log.notice("First report: id=\(reportID, privacy: .public) len=\(length, privacy: .public) bytes=\(hex, privacy: .public)")
         }
 
-        // Report ID 3: Scroll data
-        //   Byte 0: report ID (0x03)
-        //   Bytes 1-2: wheel (16-bit signed, little-endian)
-        //   Bytes 3-4: horizontal pan (16-bit signed, little-endian)
         guard reportID == 3, length >= 5 else { return }
 
-        // Scaling is applied in the EventTap via applyScaling(to:) — this
-        // function now only exists for the first-report diagnostic above.
-        // We intentionally don't parse/inject anything here; the OS driver
-        // has already produced a perfectly good scroll event that will flow
-        // through the tap for scaling.
-    }
+        let wheelTicks = Int16(report[1]) | (Int16(report[2]) << 8)
+        let hpanTicks = Int16(report[3]) | (Int16(report[4]) << 8)
 
-    // Called from the event-tap callback for scroll events attributable to
-    // the dial. Multiplies pixel and line deltas by the current scale
-    // factor, carrying fractional remainders across events so low
-    // sensitivities still produce occasional whole-unit scroll.
-    //
-    // Returns the event argument unchanged (for convenience at the call
-    // site); mutation is in-place via the CGEvent field setters.
-    func applyScaling(to event: CGEvent) {
         let scale = scaleFactor
-        if scale == 1.0 {
-            // 100%: pass-through. Preserve the device's own feel exactly.
+        pixelAccumY += Double(wheelTicks) * scale
+        pixelAccumX += Double(hpanTicks) * scale
+
+        let emitY = pixelAccumY.rounded(.towardZero)
+        let emitX = pixelAccumX.rounded(.towardZero)
+        pixelAccumY -= emitY
+        pixelAccumX -= emitX
+
+        // Sub-pixel tick — accumulator keeps the remainder for next time.
+        if emitY == 0 && emitX == 0 {
             return
         }
 
-        let rawPixelY = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
-        let rawPixelX = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
-        let rawLineY  = event.getIntegerValueField(.scrollWheelEventDeltaAxis1)
-        let rawLineX  = event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
+        emitScrollEvent(pixelY: Int32(emitY), pixelX: Int32(emitX))
+    }
 
-        pixelAccumY += rawPixelY * scale
-        pixelAccumX += rawPixelX * scale
-        lineAccumY  += Double(rawLineY) * scale
-        lineAccumX  += Double(rawLineX) * scale
+    // Construct and post a pixel-unit scroll CGEvent at the current cursor.
+    // isContinuous=1, phase=0, momentum=0 — no gesture lifecycle, so each
+    // event routes fresh to the window under the mouse at that moment.
+    private func emitScrollEvent(pixelY: Int32, pixelX: Int32) {
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: pixelY,
+            wheel2: pixelX,
+            wheel3: 0
+        ) else {
+            log.error("emitScrollEvent: CGEvent(scrollWheelEvent2Source:) returned nil")
+            return
+        }
 
-        // Pixel fields are Doubles, so we can emit the full scaled value and
-        // keep zero remainder. Line fields are integers — truncate toward
-        // zero and carry the fractional part into the next event.
-        let emitLineY = lineAccumY.rounded(.towardZero)
-        let emitLineX = lineAccumX.rounded(.towardZero)
-        lineAccumY -= emitLineY
-        lineAccumX -= emitLineX
+        // Default event.location is (0,0). Probe the current cursor so the
+        // event reaches the window under the mouse, not the top-left corner.
+        if let probe = CGEvent(source: nil) {
+            event.location = probe.location
+        }
 
-        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: pixelAccumY)
-        event.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: pixelAccumX)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: pixelAccumY)
-        event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: pixelAccumX)
-        event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: Int64(emitLineY))
-        event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: Int64(emitLineX))
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 0)
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
 
-        // Pixels are doubles so there's no rounding loss; clear the pixel
-        // accumulator after emitting.
-        pixelAccumY = 0
-        pixelAccumX = 0
+        event.post(tap: .cgSessionEventTap)
     }
 }

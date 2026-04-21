@@ -26,7 +26,7 @@ CODESIGN_OPTS ?=
 # → Settings → Accounts → Manage Certificates → +Developer ID Application.
 DEVID_IDENTITY ?= Developer ID Application: Ian Bullard (E6UHUF3KD3)
 
-.PHONY: all clean release dump_raw
+.PHONY: all clean release dump_raw watch_scrolls
 
 # Default: universal binary (Apple Silicon + Intel)
 all: $(BUNDLE)
@@ -64,3 +64,13 @@ dump_raw: Tools/dump_raw.swift
 	lipo -create $(BUILD)/dump_raw-arm64 $(BUILD)/dump_raw-x86_64 -output $(BUILD)/dump_raw
 	@rm $(BUILD)/dump_raw-arm64 $(BUILD)/dump_raw-x86_64
 	@echo "Built: $(BUILD)/dump_raw (universal)"
+
+# Listen-only session event tap that prints every scroll event reaching apps.
+# Needs Accessibility permission granted to the binary itself.
+watch_scrolls: Tools/watch_scrolls.swift
+	@mkdir -p $(BUILD)
+	swiftc $(SWIFTFLAGS) -target arm64-apple-macos$(MIN_MACOS) Tools/watch_scrolls.swift -o $(BUILD)/watch_scrolls-arm64
+	swiftc $(SWIFTFLAGS) -target x86_64-apple-macos$(MIN_MACOS) Tools/watch_scrolls.swift -o $(BUILD)/watch_scrolls-x86_64
+	lipo -create $(BUILD)/watch_scrolls-arm64 $(BUILD)/watch_scrolls-x86_64 -output $(BUILD)/watch_scrolls
+	@rm $(BUILD)/watch_scrolls-arm64 $(BUILD)/watch_scrolls-x86_64
+	@echo "Built: $(BUILD)/watch_scrolls (universal)"

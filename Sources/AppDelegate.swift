@@ -14,7 +14,6 @@ import os
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var deviceMonitor: DeviceMonitor!
-    private var eventTap: ScrollEventTap!
 
     // Menu items we need to update dynamically.
     private var statusMenuItem: NSMenuItem!
@@ -26,9 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         log.notice("Startup: bundlePath=\(Bundle.main.bundlePath, privacy: .public)")
         log.notice("Startup: executablePath=\(Bundle.main.executablePath ?? "<nil>", privacy: .public)")
 
-        // Preflight both TCC grants before touching any HID or event-tap API.
-        // Doing this up front means the user sees one consolidated prompt
-        // instead of tripping over each gate in sequence across relaunches.
+        // Preflight TCC before touching any HID API so the user sees the
+        // Input Monitoring prompt up front instead of on first dial motion.
         let status = Permissions.check()
         if !status.bothGranted {
             log.notice("Startup: missing permissions, presenting alert and exiting")
@@ -36,12 +34,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
-        log.notice("Startup: all permissions granted, continuing")
+        log.notice("Startup: permissions granted, continuing")
 
         deviceMonitor = DeviceMonitor()
-        eventTap = ScrollEventTap(deviceMonitor: deviceMonitor)
-
-        deviceMonitor.onConnectionChanged = { [weak self] connected in
+        deviceMonitor.onConnectionChanged = { [weak self] _ in
             self?.updateStatusDisplay()
         }
 
@@ -73,23 +69,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem.menu = menu
 
-        // Start device monitoring (reads raw HID, injects scaled events).
+        // Start device monitoring — seizes the dial and synthesizes
+        // scroll events from its raw HID reports.
         deviceMonitor.start()
-
-        // Start event tap (suppresses original BoDial scroll events).
-        // Preflight already confirmed Accessibility is granted, so a failure
-        // here is unexpected — surface it and bail rather than silently
-        // continuing without suppression.
-        if !eventTap.start() {
-            log.error("eventTap.start() failed despite Accessibility being granted")
-            let alert = NSAlert()
-            alert.messageText = "BoDial failed to install its event tap"
-            alert.informativeText = "Accessibility is granted but CGEvent.tapCreate still failed. Check Console.app for BoDial log lines and file a bug."
-            alert.alertStyle = .critical
-            alert.addButton(withTitle: "Quit")
-            alert.runModal()
-            NSApp.terminate(nil)
-        }
 
         updateStatusDisplay()
         log.notice("Running. Menu bar icon installed.")
@@ -148,13 +130,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Explicit teardown ensures the CGEventTap and IOHIDManager are torn down
-        // before the process exits. Without this, a rapid relaunch can race against
-        // kernel-side cleanup and install a second tap on cghidEventTap.
-        // NOTE: not called on force-quit (SIGKILL) — zombie taps are still possible
-        // in that path, and a logout/login is the only recovery.
+        // Explicit teardown ensures the IOHIDManager is closed before the
+        // process exits, releasing the seize cleanly and letting the OS HID
+        // driver resume. NOTE: not called on force-quit (SIGKILL) — the
+        // Mach ports still get released by the kernel, but the driver
+        // handover can lag until the dial is re-enumerated (unplug/replug).
         log.notice("Shutdown: beginning teardown")
-        eventTap?.stop()
         deviceMonitor?.stop()
         log.notice("Shutdown: complete")
     }

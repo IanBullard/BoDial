@@ -7,9 +7,10 @@
 import Cocoa
 import os
 
-// Single-instance guard. If another BoDial is already running, exit immediately.
-// Prevents duplicate event taps on cghidEventTap, which produce "confused filtering"
-// where the second instance's tap sees events the first has already suppressed.
+// Single-instance guard. If another BoDial is already running, exit
+// immediately. A second instance's IOHIDManagerOpen(SeizeDevice) would fail
+// anyway (the first already owns the dial), but we'd rather not log a
+// confusing error — exit cleanly instead.
 let myBundleID = Bundle.main.bundleIdentifier ?? "com.ibullard.BoDial"
 let others = NSRunningApplication.runningApplications(withBundleIdentifier: myBundleID)
     .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
