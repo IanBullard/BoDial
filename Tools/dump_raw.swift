@@ -19,7 +19,19 @@ IOHIDManagerSetDeviceMatching(manager, matching)
 
 let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
 guard result == kIOReturnSuccess else {
-    print("Failed to open HID manager: \(result)")
+    let hex = String(format: "0x%08x", UInt32(bitPattern: result))
+    let hint: String
+    switch result {
+    case kIOReturnExclusiveAccess:
+        hint = "another process has the device open exclusively — likely BoDial.app is running with its seize. Quit it first: `pkill -x BoDial`."
+    case kIOReturnNotPermitted:
+        hint = "Input Monitoring permission is missing for this binary. Grant it in System Settings › Privacy & Security › Input Monitoring."
+    case kIOReturnNoDevice:
+        hint = "no matching device present. Is the dial connected?"
+    default:
+        hint = "unknown IOReturn code."
+    }
+    print("Failed to open HID manager: \(hex) — \(hint)")
     exit(1)
 }
 
@@ -41,8 +53,8 @@ let callback: IOHIDReportCallback = { context, result, sender, type, reportID, r
 
     // Note: reportBuffer includes report ID at byte 0, payload starts at byte 1
     if reportID == 3 && reportLength >= 5 {
-        let wheel = Int16(data[1]) | (Int16(data[2]) << 8)
-        let hpan  = Int16(data[3]) | (Int16(data[4]) << 8)
+        let wheel = Int16(bitPattern: UInt16(data[1]) | (UInt16(data[2]) << 8))
+        let hpan  = Int16(bitPattern: UInt16(data[3]) | (UInt16(data[4]) << 8))
         print("SCROLL  wheel=\(String(format: "%+6d", wheel))  hpan=\(String(format: "%+6d", hpan))  raw=[\(hex)]")
     } else if reportID == 1 && reportLength >= 4 {
         let buttons = data[1]

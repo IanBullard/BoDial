@@ -1,8 +1,8 @@
 #!/usr/bin/env swift
 // Listen-only CGEventTap for scroll events. Prints every scroll event that
 // reaches the session-tap point of the pipeline — i.e. what apps actually
-// receive. Used to verify Phase 1 (no events after seize) and Phase 2+
-// (our synthesized events have the right shape).
+// receive. Handy for verifying BoDial's output envelope and for comparing
+// scroll behavior between devices.
 //
 // Requires Accessibility permission. First run will fail; add
 // `build/watch_scrolls` to System Settings › Privacy & Security ›
@@ -11,8 +11,14 @@
 import Foundation
 import CoreGraphics
 
+// Set after tapCreate so the @convention(c) callback can re-enable the
+// tap if the OS disables it. Globals are the only shared state a C-ABI
+// callback can reach without an UnsafeMutableRawPointer dance.
+var installedTap: CFMachPort?
+
 let scrollCallback: CGEventTapCallBack = { _, type, event, _ in
-    if type == .scrollWheel {
+    switch type {
+    case .scrollWheel:
         let py = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
         let px = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
         let fy = event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1)
@@ -34,8 +40,15 @@ let scrollCallback: CGEventTapCallBack = { _, type, event, _ in
         )
         print(line)
         fflush(stdout)
-    } else if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        fputs("watch_scrolls: tap disabled (\(type.rawValue)), will be re-enabled by re-entry\n", stderr)
+
+    case .tapDisabledByTimeout, .tapDisabledByUserInput:
+        fputs("watch_scrolls: tap disabled (\(type.rawValue)), re-enabling\n", stderr)
+        if let tap = installedTap {
+            CGEvent.tapEnable(tap: tap, enable: true)
+        }
+
+    default:
+        break
     }
     return Unmanaged.passUnretained(event)
 }
@@ -59,6 +72,7 @@ guard let tap = CGEvent.tapCreate(
         """, stderr)
     exit(1)
 }
+installedTap = tap
 
 let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
 CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)

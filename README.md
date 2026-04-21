@@ -1,93 +1,76 @@
 # BoDial
 
-macOS scroll sensitivity fix for the [Engineer Bo Full Scroll Dial](https://www.engineerbo.com/) — a high-resolution USB/Bluetooth rotary encoder.
+macOS companion app for the [Engineer Bo Full Scroll Dial](https://www.engineerbo.com/) — a high-resolution USB/Bluetooth rotary encoder.
 
-The BoDial sends high-resolution scroll data (16-bit, up to 120x multiplier) that macOS interprets using its standard mouse scroll acceleration. This makes the dial unusably sensitive — a light touch scrolls several pages. BoDial fixes this by intercepting scroll events and scaling them to usable levels while preserving the dial's fine-grained resolution.
-
-## Status
-
-**Pre-production** — like the hardware itself. Works, solves the problem, ships as-is.
-
-## How It Works
-
-BoDial runs as a menu bar app (no Dock icon). It:
-
-1. **Seizes** the dial via IOKit HID (USB vendor `0xFEED` / product `0xBEEF`) with `kIOHIDOptionsTypeSeizeDevice`. The OS HID driver stops generating scroll events for the dial — nothing else on the machine sees them.
-2. **Parses** raw HID reports (Report ID 3: bytes 1-2 wheel, bytes 3-4 horizontal pan, both signed 16-bit little-endian).
-3. **Scales** each tick by the sensitivity setting, carrying sub-pixel remainders across reports so slow turns at low sensitivity still eventually emit whole-pixel scroll events.
-4. **Posts** synthesized `isContinuous=1` pixel-unit scroll CGEvents at the session tap point, routed to the window under the cursor at that moment. No gesture phase lifecycle, so no window-focus lock: scroll follows the mouse, always.
-5. **Releases** the seize automatically when the app exits (clean or crash). The OS HID driver resumes and the dial reverts to stock behavior until BoDial is relaunched.
-
-Other mice and trackpads are completely unaffected — BoDial only touches events it generates itself for the seized dial.
-
-## Requirements
-
-- macOS 13.0 (Ventura) or later
-- Apple Silicon or Intel Mac (universal binary)
-- Xcode Command Line Tools (`xcode-select --install`)
-- Input Monitoring permission (System Settings > Privacy & Security > Input Monitoring) — required to seize the HID device
+BoDial takes exclusive ownership of the dial and delivers smooth per-pixel scroll events at a sensitivity you control. The OS's default interpretation of the dial as a standard mouse wheel makes it unusably sensitive (a light touch scrolls pages); BoDial replaces that with a direct tick-to-pixel mapping.
 
 ## Install
 
-Download the latest `.zip` from [Releases](https://github.com/ibullard/BoDial/releases), unzip, and drag `BoDial.app` to your Applications folder.
+Download the latest `.zip` from [Releases](https://github.com/ibullard/BoDial/releases), unzip, and drag `BoDial.app` to Applications.
 
 On first launch:
-1. macOS may warn about an unidentified developer — right-click the app and select **Open**
-2. Grant Input Monitoring permission when prompted (or manually in System Settings), then relaunch once
 
-## Building
+1. macOS may warn about an unidentified developer — right-click the app, select **Open**.
+2. BoDial will ask for **Input Monitoring** and **Accessibility**. Click **Open Settings** in its alert to jump to the right pane, grant the permission, and BoDial will auto-relaunch within about 30 seconds with the new grant in effect — no need to hunt the app down in Finder. Input Monitoring lets BoDial read the dial; Accessibility lets it post synthesized scroll events (macOS classes any synthetic input injection as an accessibility feature).
+3. On the second pass, BoDial will ask for the remaining permission the same way. **Note:** if System Settings is still open on the Input Monitoring pane from step 2, macOS may foreground that window without navigating to Accessibility — this is a known quirk of `x-apple.systempreferences:` URLs when Settings is already running. Just click **Privacy & Security → Accessibility** in the Settings sidebar and grant BoDial there.
+
+## Use
+
+Click the dial icon in the menu bar.
+
+- **Sensitivity slider** — pixels per dial tick × 100. `100%` is 1 tick → 1 pixel (the baseline). `500%` amplifies to 5 px/tick; `1%` attenuates to 0.01 px/tick with sub-pixel accumulation so slow turns still eventually produce whole-pixel scrolls.
+- **Default**: 100%.
+- Setting is saved across launches.
+
+Other mice and trackpads are unaffected — BoDial only emits events for the dial itself.
+
+## How it works
+
+BoDial seizes the dial via `IOHIDManagerOpen(kIOHIDOptionsTypeSeizeDevice)`, which stops the OS HID driver from generating any scroll events for it. The app parses the dial's raw HID reports, scales each tick by the sensitivity setting (with a sub-pixel remainder carried across reports), and posts pixel-unit `CGEvent`s at the session tap point with `isContinuous=1`, no scroll-phase lifecycle. That combination gives apps smooth per-pixel scrolling without the gesture-capture behavior that locks scroll delivery to a single window mid-spin.
+
+When BoDial exits — cleanly or via crash — the Mach ports are released and the OS driver resumes. The dial reverts to its too-sensitive default until BoDial is relaunched.
+
+## Build
+
+Requires macOS 13+ and Xcode Command Line Tools (`xcode-select --install`). Produces a universal binary (Apple Silicon + Intel).
 
 ```bash
 git clone https://github.com/ibullard/BoDial.git
 cd BoDial
-make
+make                # build/BoDial.app (signed with local identity)
+make release        # build/BoDial-$(VERSION).zip (Developer ID signed, hardened runtime)
 ```
 
-This produces `build/BoDial.app`. To create a distributable zip:
+`make` signs the bundle with a local identity (default: `BoDial`). On a fresh clone, override with ad-hoc signing:
 
 ```bash
-make release
+make CODESIGN_IDENTITY=-
 ```
 
-## Usage
+Ad-hoc works fine for running locally, but the signature changes every rebuild — macOS treats each build as a new app and re-prompts for TCC grants. For stable grants across rebuilds, create a one-off self-signed cert named `BoDial` in Keychain Access (**Keychain Access → Certificate Assistant → Create a Certificate**, identity type = Code Signing, self-signed) and the default just works.
 
-- Launch `BoDial.app` — a dial icon appears in the menu bar
-- Click the icon to see connection status and adjust sensitivity
-- Sensitivity slider: **pixels per dial tick × 100**. 100% = 1 tick → 1 pixel. 1% = 1 tick → 0.01 pixel (accumulator emits 1 px every ~100 ticks).
-- Your setting is saved automatically between launches
+`make release` expects a Developer ID Application certificate in your keychain. Override the identity via `DEVID_IDENTITY="Developer ID Application: Your Name (TEAMID)"` if yours is different.
 
 ## Diagnostics
 
-Two helper tools are included for debugging:
+- `make dump_raw && build/dump_raw` — print raw HID reports from the dial. BoDial must not be running (seize conflict).
+- `make watch_scrolls && build/watch_scrolls` — print every scroll event reaching apps (listen-only session tap). Grant the tool Accessibility in System Settings on first run.
+- `log stream --predicate 'subsystem == "com.github.ibullard.bodial"'` — live app logs.
+- `scroll-test.html` — open in any browser to visually verify scrolling with a pseudo-live dial indicator.
 
-```bash
-make dump_raw
-build/dump_raw           # prints raw HID bytes from the dial
-                         # — note: requires BoDial NOT running (seize conflict)
+## Known limitations
 
-make watch_scrolls
-build/watch_scrolls      # prints every scroll CGEvent reaching apps
-                         # — requires Accessibility grant on the tool itself
-```
+- BoDial must be running for the dial to work usefully; if it crashes, the dial reverts to the OS default until relaunch. After a force-quit, the dial may need an unplug/replug for the OS driver to re-enumerate cleanly.
+- The VID/PID (`0xFEED`/`0xBEEF`) are pre-production placeholders; they will change in the final hardware revision.
 
-Unified logs from the app:
+## Credits
 
-```bash
-log stream --predicate 'subsystem == "com.github.ibullard.bodial"'
-```
+- **Engineer Bo** — the Full Scroll Dial hardware.
+- **[callan101/scrolldial](https://github.com/callan101/scrolldial)** — Callan's SmoothDial work was the inspiration for the continuous-pixel approach; `scroll-test.html` is sourced from that repo.
+- **Claude** (Anthropic) — collaborative development: IOKit/CGEvent integration, architecture iteration, and this README.
 
-## Known Limitations
-
-- Because BoDial seizes the HID device, the dial depends on BoDial being running. If BoDial crashes or is force-killed, the dial reverts to the OS's native (too-sensitive) behavior until BoDial is relaunched — occasionally requiring an unplug/replug of the dial to force re-enumeration.
-- Both USB and Bluetooth are tested.
-- The VID/PID (`0xFEED`/`0xBEEF`) are pre-production placeholders and will likely change in the final hardware revision.
+Not affiliated with or endorsed by Engineer Bo.
 
 ## License
 
 [MIT](LICENSE)
-
-## Acknowledgments
-
-- **Engineer Bo** for creating the Full Scroll Dial hardware
-- **Claude** (Anthropic) for collaborative development — architecture, IOKit/CGEvent integration, and iterative debugging
-- This project is not affiliated with or endorsed by Engineer Bo

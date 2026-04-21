@@ -1,8 +1,8 @@
 // AppDelegate.swift — Menu bar UI for BoDial.
 //
-// Creates a status bar item (menu bar icon) with a dropdown menu containing:
+// Status bar item with a dropdown menu containing:
 // - Device connection status
-// - Sensitivity slider (1-100%, persisted to UserDefaults)
+// - Sensitivity slider (1-500%, persisted to UserDefaults)
 // - Quit button
 //
 // Uses AppKit (NSMenu, NSStatusItem) directly — no SwiftUI dependency,
@@ -25,10 +25,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         log.notice("Startup: bundlePath=\(Bundle.main.bundlePath, privacy: .public)")
         log.notice("Startup: executablePath=\(Bundle.main.executablePath ?? "<nil>", privacy: .public)")
 
-        // Preflight TCC before touching any HID API so the user sees the
-        // Input Monitoring prompt up front instead of on first dial motion.
+        // Preflight TCC before touching any HID or event-posting API so the
+        // user sees both prompts up front instead of tripping over them in
+        // sequence. Input Monitoring is needed to seize the dial;
+        // Accessibility is needed to post synthesized scroll events.
         let status = Permissions.check()
-        if !status.bothGranted {
+        if !status.isGranted {
             log.notice("Startup: missing permissions, presenting alert and exiting")
             Permissions.presentMissingAlert(status)
             NSApp.terminate(nil)
@@ -90,10 +92,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         valueLabel.alignment = .right
 
-        let stored = UserDefaults.standard.integer(forKey: "scrollScale")
-        let initial = stored > 0 ? stored : 5
+        let stored = UserDefaults.standard.integer(forKey: Sensitivity.defaultsKey)
+        let initial = stored > 0 ? stored : Sensitivity.defaultPct
 
-        let slider = NSSlider(value: Double(initial), minValue: 1, maxValue: 100,
+        let slider = NSSlider(value: Double(initial),
+                              minValue: Double(Sensitivity.min),
+                              maxValue: Double(Sensitivity.max),
                               target: self, action: #selector(sliderChanged(_:)))
         slider.frame = NSRect(x: 16, y: 4, width: 218, height: 24)
         slider.isContinuous = true
@@ -109,7 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func sliderChanged(_ sender: NSSlider) {
         let value = Int(sender.doubleValue)
-        UserDefaults.standard.set(value, forKey: "scrollScale")
+        UserDefaults.standard.set(value, forKey: Sensitivity.defaultsKey)
         updateValueLabel(value)
     }
 

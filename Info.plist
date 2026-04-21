@@ -9,9 +9,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.github.ibullard.bodial</string>
     <key>CFBundleVersion</key>
-    <string>0.9.0</string>
+    <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.9.0</string>
+    <string>1.0.0</string>
     <key>CFBundleExecutable</key>
     <string>BoDial</string>
     <key>CFBundlePackageType</key>
@@ -25,9 +25,11 @@
     <key>LSUIElement</key>
     <true/>
 
-    <!-- TCC usage string. Shown in the Input Monitoring prompt and in
-         System Settings. Required or the prompt is generic/unreliable. -->
+    <!-- TCC usage strings. Shown in the system permission prompts and in
+         System Settings. Required or the prompts are generic/unreliable. -->
     <key>NSInputMonitoringUsageDescription</key>
     <string>BoDial reads HID reports from the Scroll Dial to reshape its scroll output into smooth per-pixel scrolling.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>BoDial posts synthesized scroll events from the dial. macOS classes any synthetic input injection as an Accessibility feature.</string>
 </dict>
 </plist>

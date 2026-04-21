@@ -19,6 +19,15 @@ import os
 let kBoDial_VID: Int = 0xFEED
 let kBoDial_PID: Int = 0xBEEF
 
+// Sensitivity UI + persistence. The slider and DeviceMonitor both read
+// and write this key, so the range and default live in one place.
+enum Sensitivity {
+    static let defaultsKey = "scrollScale"
+    static let min         = 1
+    static let max         = 500
+    static let defaultPct  = 100
+}
+
 class DeviceMonitor {
     private var manager: IOHIDManager?
     // Currently active device (the one we're listening to). Only one at a
@@ -48,11 +57,12 @@ class DeviceMonitor {
     var onConnectionChanged: ((Bool) -> Void)?
 
     // Slider semantics: pixels per raw HID tick = scaleFactor. 100 means
-    // 1 tick → 1 px, 50 means 1 tick → 0.5 px (accumulator emits a whole
-    // pixel every ~2 ticks), 1 means 1 tick → 0.01 px (~100 ticks per px).
+    // 1 tick → 1 px (the 1:1 baseline). Below that is attenuation with
+    // sub-pixel accumulation; above is amplification (e.g. 500 = 1 tick
+    // → 5 px). Default assumes a first-time user with no stored value.
     var scaleFactor: Double {
-        let stored = UserDefaults.standard.integer(forKey: "scrollScale")
-        let pct = stored > 0 ? stored : 5
+        let stored = UserDefaults.standard.integer(forKey: Sensitivity.defaultsKey)
+        let pct = stored > 0 ? stored : Sensitivity.defaultPct
         return Double(pct) / 100.0
     }
 
@@ -105,16 +115,20 @@ class DeviceMonitor {
             log.error("DeviceMonitor.start: IOHIDManagerOpen FAILED (\(hex, privacy: .public)): \(hint, privacy: .public)")
         }
 
-        if let set = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> {
-            log.notice("DeviceMonitor.start: matching devices currently present: \(set.count, privacy: .public)")
-            for d in set {
-                let name = IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String ?? "?"
-                let vid = (IOHIDDeviceGetProperty(d, kIOHIDVendorIDKey as CFString) as? Int) ?? -1
-                let pid = (IOHIDDeviceGetProperty(d, kIOHIDProductIDKey as CFString) as? Int) ?? -1
-                log.notice("  - \(name, privacy: .public) VID=0x\(String(vid, radix: 16), privacy: .public) PID=0x\(String(pid, radix: 16), privacy: .public)")
-            }
-        } else {
+        logMatchingDevices(manager)
+    }
+
+    private func logMatchingDevices(_ manager: IOHIDManager) {
+        guard let set = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
             log.notice("DeviceMonitor.start: IOHIDManagerCopyDevices returned nil")
+            return
+        }
+        log.notice("DeviceMonitor.start: matching devices currently present: \(set.count, privacy: .public)")
+        for d in set {
+            let name = IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String ?? "?"
+            let vid = (IOHIDDeviceGetProperty(d, kIOHIDVendorIDKey as CFString) as? Int) ?? -1
+            let pid = (IOHIDDeviceGetProperty(d, kIOHIDProductIDKey as CFString) as? Int) ?? -1
+            log.notice("  - \(name, privacy: .public) VID=0x\(String(vid, radix: 16), privacy: .public) PID=0x\(String(pid, radix: 16), privacy: .public)")
         }
     }
 
@@ -254,8 +268,8 @@ class DeviceMonitor {
 
         guard reportID == 3, length >= 5 else { return }
 
-        let wheelTicks = Int16(report[1]) | (Int16(report[2]) << 8)
-        let hpanTicks = Int16(report[3]) | (Int16(report[4]) << 8)
+        let wheelTicks = Int16(bitPattern: UInt16(report[1]) | (UInt16(report[2]) << 8))
+        let hpanTicks  = Int16(bitPattern: UInt16(report[3]) | (UInt16(report[4]) << 8))
 
         let scale = scaleFactor
         pixelAccumY += Double(wheelTicks) * scale

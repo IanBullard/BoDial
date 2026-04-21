@@ -1,22 +1,21 @@
 // main.swift — Application entry point.
 //
-// macOS apps need an NSApplication to manage the event loop and system
-// integration. We configure it as an "accessory" app (LSUIElement) so it
-// lives in the menu bar without a Dock icon.
+// Accessory activation policy (via LSUIElement in Info.plist) means we
+// live in the menu bar with no Dock icon.
 
 import Cocoa
 import os
 
-// Single-instance guard. If another BoDial is already running, exit
-// immediately. A second instance's IOHIDManagerOpen(SeizeDevice) would fail
-// anyway (the first already owns the dial), but we'd rather not log a
-// confusing error — exit cleanly instead.
-let myBundleID = Bundle.main.bundleIdentifier ?? "com.ibullard.BoDial"
-let others = NSRunningApplication.runningApplications(withBundleIdentifier: myBundleID)
-    .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-if !others.isEmpty {
-    log.notice("Already running (pid \(others[0].processIdentifier, privacy: .public)). Exiting.")
-    exit(0)
+// Single-instance guard. A second instance's IOHIDManagerOpen(SeizeDevice)
+// would fail anyway since the first already owns the dial — exit cleanly
+// instead of logging a confusing error.
+if let bundleID = Bundle.main.bundleIdentifier {
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    if let first = others.first {
+        log.notice("Already running (pid \(first.processIdentifier, privacy: .public)). Exiting.")
+        exit(0)
+    }
 }
 
 let app = NSApplication.shared

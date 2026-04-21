@@ -1,0 +1,405 @@
+<!--
+  Scroll test page for BoDial.
+
+  Sourced from callan101/scrolldial with attribution.
+  Upstream: https://github.com/callan101/scrolldial
+
+  Standalone use: open in a browser, scroll the left panel, watch the dial
+  visualization on the right track rotation. The "Raw HID input" panel and
+  WebSocket event log require a companion server at localhost:8070 — see
+  the upstream repo for scroll-debug-server.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scroll Debug</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Mono", Menlo, monospace; background: #1a1a2e; color: #e0e0e0; display: flex; height: 100vh; overflow: hidden; }
+
+  #scrollArea {
+    flex: 1; overflow-y: auto; padding: 2rem; scroll-behavior: auto;
+  }
+  #scrollArea .row {
+    padding: 0.75rem 1rem; border-bottom: 1px solid #2a2a4a; font-size: 14px; color: #888;
+  }
+  #scrollArea .row span { color: #555; margin-right: 1rem; display: inline-block; width: 4ch; text-align: right; }
+  #scrollArea .row.marker { color: #6c6cff; border-bottom-color: #3a3a6a; }
+
+  #dashboard {
+    width: 460px; min-width: 460px; background: #16213e; border-left: 1px solid #2a2a4a;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #dashboard h2 {
+    padding: 1rem; font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: #6c6cff; border-bottom: 1px solid #2a2a4a;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #wsStatus { font-size: 11px; text-transform: none; letter-spacing: 0; }
+  #wsStatus.connected { color: #4ade80; }
+  #wsStatus.disconnected { color: #f87171; }
+
+  #stats {
+    padding: 1rem; font-size: 13px; line-height: 2; border-bottom: 1px solid #2a2a4a;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem;
+  }
+  .stat-group-title {
+    grid-column: 1 / -1; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+    padding-top: 0.25rem; line-height: 2.5;
+  }
+  .stat-group-title.raw-title { color: #f59e0b; }
+  .stat-group-title.browser-title { color: #4ade80; }
+  .stat-group-title.output-title { color: #c084fc; }
+  #stats .label { color: #888; display: inline-block; width: 11ch; }
+  #stats .val { font-weight: 600; }
+  .val.pos { color: #4ade80; }
+  .val.neg { color: #f87171; }
+  .val.raw-val { color: #fbbf24; }
+  .val.output-val { color: #c084fc; }
+
+  #dialSection {
+    padding: 1rem; border-bottom: 1px solid #2a2a4a;
+    display: flex; flex-direction: column; align-items: center; gap: 0.75rem;
+  }
+  #dialSection .stat-group-title { align-self: stretch; }
+  #dialSection .dial-hint { font-size: 11px; color: #888; text-align: center; line-height: 1.4; }
+  .dial-svg { display: block; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.35)); }
+  #dialSliderRow {
+    width: 100%; display: flex; flex-direction: column; gap: 0.35rem;
+    font-size: 12px; color: #aaa;
+  }
+  #dialSliderRow label { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+  #dialSensitivity {
+    flex: 1; min-width: 120px; accent-color: #6c6cff;
+  }
+  #dialSensitivityVal { font-variant-numeric: tabular-nums; color: #e0e0e0; min-width: 7ch; text-align: right; }
+
+  #chartContainer { padding: 1rem; border-bottom: 1px solid #2a2a4a; }
+  #chartContainer canvas { width: 100%; height: 160px; display: block; border-radius: 4px; background: #0f0f23; }
+
+  #log { flex: 1; overflow-y: auto; padding: 0.5rem 1rem; font-size: 11px; line-height: 1.6; }
+  #log .entry { white-space: nowrap; }
+  #log .entry.raw { color: #fbbf24; }
+  #log .entry.output { color: #c084fc; }
+  #log .entry.wheel { color: #4ade80; }
+  #log .entry.scroll { color: #60a5fa; }
+  #log .entry.sys { color: #888; font-style: italic; }
+
+  #footer {
+    padding: 0.75rem 1rem; border-top: 1px solid #2a2a4a; font-size: 12px; color: #888; text-align: center;
+  }
+  #footer kbd { background: #2a2a4a; padding: 2px 6px; border-radius: 3px; color: #ccc; }
+</style>
+</head>
+<body>
+
+<div id="scrollArea"></div>
+
+<div id="dashboard">
+  <h2>Scroll Debug <span id="wsStatus" class="disconnected">disconnected</span></h2>
+  <div id="stats">
+    <div class="stat-group-title raw-title">Raw HID input</div>
+    <div><span class="label">dY</span> <span class="val raw-val" id="rawDY">-</span></div>
+    <div><span class="label">cumulative</span> <span class="val raw-val" id="rawCum">0</span></div>
+    <div><span class="label">events</span> <span class="val raw-val" id="rawN">0</span></div>
+    <div><span class="label">events/s</span> <span class="val raw-val" id="rawEps">0</span></div>
+
+    <div class="stat-group-title browser-title">Browser wheel (= Mos output)</div>
+    <div><span class="label">dY</span> <span class="val" id="wheelDY">-</span></div>
+    <div><span class="label">cumulative</span> <span class="val" id="wheelCum">0</span></div>
+    <div><span class="label">scrollTop</span> <span class="val" id="scrollTop">0</span></div>
+    <div><span class="label">events/s</span> <span class="val" id="wheelEps">0</span></div>
+  </div>
+  <div id="dialSection">
+    <div class="stat-group-title" style="color:#60a5fa;">Scroll dial</div>
+    <p class="dial-hint">Rotates with the left panel: down → clockwise, up → counter‑clockwise (not a wheel spin).</p>
+    <svg class="dial-svg" viewBox="0 0 200 200" width="160" height="160" aria-hidden="true">
+      <defs>
+        <linearGradient id="dialFaceGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" style="stop-color:#1e2a4a"/>
+          <stop offset="100%" style="stop-color:#0f1628"/>
+        </linearGradient>
+      </defs>
+      <circle cx="100" cy="100" r="92" fill="url(#dialFaceGrad)" stroke="#3a4a6a" stroke-width="2"/>
+      <g id="dialTicks" fill="none" stroke="#5a6a8a" stroke-width="1.5"></g>
+      <g id="dialRotateGroup" transform="rotate(0 100 100)">
+        <line x1="100" y1="100" x2="100" y2="34" stroke="#6c6cff" stroke-width="5" stroke-linecap="round"/>
+        <circle cx="100" cy="100" r="10" fill="#16213e" stroke="#6c6cff" stroke-width="3"/>
+      </g>
+    </svg>
+    <div id="dialSliderRow">
+      <label>
+        <span>Degrees per wheel delta</span>
+        <span id="dialSensitivityVal">0.0050°</span>
+      </label>
+      <input type="range" id="dialSensitivity" min="0" max="0.015" step="0.0001" value="0.005" />
+    </div>
+  </div>
+  <div id="chartContainer">
+    <canvas id="chart"></canvas>
+  </div>
+  <div id="log"></div>
+  <div id="footer">Scroll left panel &middot; <kbd>P</kbd> pause &middot; <kbd>R</kbd> clear &middot; run <kbd>./scroll-debug-server</kbd></div>
+</div>
+
+<script>
+const scrollArea = document.getElementById('scrollArea');
+const logEl = document.getElementById('log');
+const chart = document.getElementById('chart');
+const ctx = chart.getContext('2d');
+const wsStatusEl = document.getElementById('wsStatus');
+const dialRotateGroup = document.getElementById('dialRotateGroup');
+const dialTicks = document.getElementById('dialTicks');
+const dialSensitivityEl = document.getElementById('dialSensitivity');
+const dialSensitivityValEl = document.getElementById('dialSensitivityVal');
+
+(function initDialTicks() {
+  const cx = 100, cy = 100, r1 = 78, r2 = 88;
+  for (let deg = 0; deg < 360; deg += 15) {
+    const rad = (deg - 90) * Math.PI / 180;
+    const x1 = cx + r1 * Math.cos(rad), y1 = cy + r1 * Math.sin(rad);
+    const x2 = cx + r2 * Math.cos(rad), y2 = cy + r2 * Math.sin(rad);
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', x1.toFixed(2));
+    line.setAttribute('y1', y1.toFixed(2));
+    line.setAttribute('x2', x2.toFixed(2));
+    line.setAttribute('y2', y2.toFixed(2));
+    line.setAttribute('opacity', deg % 90 === 0 ? '1' : '0.45');
+    dialTicks.appendChild(line);
+  }
+})();
+
+let dialDeg = 0;
+
+function setDialRotation(deg) {
+  dialDeg = deg;
+  dialRotateGroup.setAttribute('transform', `rotate(${dialDeg} 100 100)`);
+}
+
+function formatDialSensitivity() {
+  const v = parseFloat(dialSensitivityEl.value);
+  dialSensitivityValEl.textContent = v.toFixed(4) + '°';
+}
+
+dialSensitivityEl.addEventListener('input', formatDialSensitivity);
+formatDialSensitivity();
+
+const ROWS = 2000;
+for (let i = 1; i <= ROWS; i++) {
+  const div = document.createElement('div');
+  div.className = 'row' + (i % 100 === 0 ? ' marker' : '');
+  div.innerHTML = `<span>${i}</span>` + (i % 100 === 0
+    ? `── line ${i} ──`
+    : `The quick brown fox jumps over the lazy dog. Row ${i} of ${ROWS}.`);
+  scrollArea.appendChild(div);
+}
+
+const MAX_LOG = 300;
+const MAX_CHART = 400;
+
+let paused = false;
+
+const state = {
+  rawCumY: 0, rawN: 0, rawTimes: [],
+  outCumY: 0, outN: 0, outTimes: [],
+  wheelCumY: 0, wheelN: 0, wheelTimes: [],
+  initialScrollTop: null,
+  chart: [],
+};
+
+function addLog(cls, text, forceScroll) {
+  const el = document.createElement('div');
+  el.className = 'entry ' + cls;
+  el.textContent = text;
+  logEl.appendChild(el);
+  while (logEl.children.length > MAX_LOG) logEl.removeChild(logEl.firstChild);
+  if (!paused || forceScroll) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function eps(times) {
+  const now = performance.now();
+  const cutoff = now - 1000;
+  while (times.length && times[0] < cutoff) times.shift();
+  return times.length;
+}
+
+function pushChart() {
+  state.chart.push({
+    raw: state.rawCumY,
+    out: state.outCumY,
+    wheel: state.wheelCumY,
+  });
+  while (state.chart.length > MAX_CHART) state.chart.shift();
+  drawChart();
+}
+
+// MARK: - WebSocket
+
+let ws = null;
+let reconnectTimer = null;
+
+function connectWS() {
+  if (ws && ws.readyState <= 1) return;
+  ws = new WebSocket('ws://localhost:8070');
+  ws.onopen = () => {
+    wsStatusEl.textContent = 'connected';
+    wsStatusEl.className = 'connected';
+    addLog('sys', '── websocket connected ──');
+  };
+  ws.onclose = () => {
+    wsStatusEl.textContent = 'disconnected';
+    wsStatusEl.className = 'disconnected';
+    if (!reconnectTimer) reconnectTimer = setInterval(() => {
+      if (!ws || ws.readyState >= 2) connectWS();
+    }, 2000);
+  };
+  ws.onerror = () => {};
+  ws.onmessage = (msg) => {
+    if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+    if (paused) return;
+    try {
+      const e = JSON.parse(msg.data);
+      const now = performance.now();
+      if (e.kind === 'raw') {
+        state.rawCumY = e.cumY;
+        state.rawN = e.n;
+        state.rawTimes.push(now);
+        document.getElementById('rawDY').textContent = (e.dY > 0 ? '+' : '') + e.dY.toFixed(1);
+        document.getElementById('rawCum').textContent = e.cumY.toFixed(0);
+        document.getElementById('rawN').textContent = e.n;
+        document.getElementById('rawEps').textContent = eps(state.rawTimes);
+        const mom = e.momentum > 0 ? ` mom:${e.momentum}` : '';
+        addLog('raw', `RAW    dY=${(e.dY > 0 ? '+' : '') + e.dY.toFixed(1).padStart(8)}  phase=${e.phase.padEnd(10)}  cumY=${e.cumY.toFixed(0).padStart(8)}${mom}`);
+      } else if (e.kind === 'output') {
+        state.outCumY = e.cumY;
+        state.outN = e.n;
+        state.outTimes.push(now);
+        document.getElementById('outDY').textContent = (e.dY > 0 ? '+' : '') + e.dY.toFixed(1);
+        document.getElementById('outCum').textContent = e.cumY.toFixed(0);
+        document.getElementById('outN').textContent = e.n;
+        document.getElementById('outEps').textContent = eps(state.outTimes);
+        addLog('output', `OUTPUT dY=${(e.dY > 0 ? '+' : '') + e.dY.toFixed(1).padStart(8)}  phase=${e.phase.padEnd(10)}  cumY=${e.cumY.toFixed(0).padStart(8)}`);
+      }
+      pushChart();
+    } catch (_) {}
+  };
+}
+
+connectWS();
+
+// MARK: - Browser wheel events
+
+scrollArea.addEventListener('wheel', (e) => {
+  if (paused) return;
+  const now = performance.now();
+  state.wheelCumY += e.deltaY;
+  state.wheelN++;
+  state.wheelTimes.push(now);
+  document.getElementById('wheelDY').textContent = (e.deltaY > 0 ? '+' : '') + e.deltaY.toFixed(1);
+  document.getElementById('wheelCum').textContent = state.wheelCumY.toFixed(0);
+  document.getElementById('wheelEps').textContent = eps(state.wheelTimes);
+  const sens = parseFloat(dialSensitivityEl.value);
+  setDialRotation(dialDeg + e.deltaY * sens);
+  addLog('wheel', `WHEEL  dY=${(e.deltaY > 0 ? '+' : '') + e.deltaY.toFixed(1).padStart(8)}  mode=${['px','line','page'][e.deltaMode] || '?'}`);
+  pushChart();
+}, { passive: true });
+
+scrollArea.addEventListener('scroll', () => {
+  if (paused) return;
+  const top = scrollArea.scrollTop;
+  document.getElementById('scrollTop').textContent = top.toFixed(0);
+  if (state.initialScrollTop === null) state.initialScrollTop = top;
+});
+
+// MARK: - Chart
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = chart.getBoundingClientRect();
+  chart.width = rect.width * dpr;
+  chart.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const w = rect.width, h = rect.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const data = state.chart;
+  if (data.length < 2) return;
+
+  let minV = Infinity, maxV = -Infinity;
+  for (const d of data) {
+    for (const v of [d.raw, d.out, d.wheel]) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+  }
+  const range = maxV - minV || 1;
+  const pad = range * 0.1;
+  const lo = minV - pad, hi = maxV + pad;
+
+  function toY(v) { return h - (v - lo) / (hi - lo) * h; }
+  function toX(i) { return (i / (MAX_CHART - 1)) * w; }
+
+  // grid
+  ctx.strokeStyle = '#2a2a4a';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = (i / 4) * h;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  function drawLine(color, key) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = toX(i), y = toY(data[i][key]);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  drawLine('#fbbf24', 'raw');
+  drawLine('#c084fc', 'out');
+  drawLine('#4ade80', 'wheel');
+
+  ctx.font = '10px -apple-system, monospace';
+  ctx.fillStyle = '#fbbf24'; ctx.fillText('raw HID', 8, 14);
+  ctx.fillStyle = '#c084fc'; ctx.fillText('Mos output', 8, 28);
+  ctx.fillStyle = '#4ade80'; ctx.fillText('browser wheel', 8, 42);
+}
+
+// MARK: - Clear
+
+document.addEventListener('keydown', (e) => {
+  if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) return;
+  if (e.key === 'p' || e.key === 'P') {
+    paused = !paused;
+    wsStatusEl.textContent = paused ? 'PAUSED' : (ws && ws.readyState === 1 ? 'connected' : 'disconnected');
+    wsStatusEl.className = paused ? 'disconnected' : (ws && ws.readyState === 1 ? 'connected' : 'disconnected');
+    addLog('sys', paused ? '── paused ──' : '── resumed ──', true);
+    return;
+  }
+  if (e.key === 'r' || e.key === 'R') {
+    state.rawCumY = 0; state.rawN = 0; state.rawTimes = [];
+    state.outCumY = 0; state.outN = 0; state.outTimes = [];
+    state.wheelCumY = 0; state.wheelN = 0; state.wheelTimes = [];
+    state.initialScrollTop = null; state.chart = [];
+    setDialRotation(0);
+    logEl.innerHTML = '';
+    for (const id of ['rawDY','rawCum','rawN','rawEps','outDY','outCum','outN','outEps','wheelDY','wheelCum','wheelEps']) {
+      const el = document.getElementById(id);
+      el.textContent = id.endsWith('DY') ? '-' : '0';
+    }
+    document.getElementById('scrollTop').textContent = scrollArea.scrollTop.toFixed(0);
+    ctx.clearRect(0, 0, chart.width, chart.height);
+    addLog('sys', '── cleared ──');
+  }
+});
+
+requestAnimationFrame(drawChart);
+window.addEventListener('resize', drawChart);
+</script>
+</body>
+</html>
