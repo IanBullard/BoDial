@@ -19,15 +19,6 @@ import os
 let kBoDial_VID: Int = 0xFEED
 let kBoDial_PID: Int = 0xBEEF
 
-// Sensitivity UI + persistence. The slider and DeviceMonitor both read
-// and write this key, so the range and default live in one place.
-enum Sensitivity {
-    static let defaultsKey = "scrollScale"
-    static let min         = 1
-    static let max         = 500
-    static let defaultPct  = 100
-}
-
 class DeviceMonitor {
     private var manager: IOHIDManager?
     // Currently active device (the one we're listening to). Only one at a
@@ -45,26 +36,19 @@ class DeviceMonitor {
     // e.g. BLE uses a different report ID / layout than USB. Then stay quiet.
     private var firstReportLogged = false
 
-    // Sub-pixel accumulator. We scale raw HID tick counts by the sensitivity
-    // factor and round toward zero for the emitted event, carrying the
-    // fractional remainder across reports. Without this, low sensitivity
-    // rounds every individual tick to zero and the dial feels dead until
-    // the user spins fast enough that the scaled delta crosses 1 pixel.
+    // Sub-pixel accumulator. The curve returns fractional pixels; we round
+    // toward zero for the emitted event and carry the remainder across
+    // reports so slow motion still crosses pixel boundaries eventually.
     private var pixelAccumY: Double = 0
     private var pixelAccumX: Double = 0
 
+    // Per-axis velocity curves. Each tracks its own EMA so vertical and
+    // horizontal motion don't contaminate each other's acceleration.
+    private var wheelCurve = ScrollCurve()
+    private var hpanCurve = ScrollCurve()
+
     // Called when connection state changes (for UI updates).
     var onConnectionChanged: ((Bool) -> Void)?
-
-    // Slider semantics: pixels per raw HID tick = scaleFactor. 100 means
-    // 1 tick → 1 px (the 1:1 baseline). Below that is attenuation with
-    // sub-pixel accumulation; above is amplification (e.g. 500 = 1 tick
-    // → 5 px). Default assumes a first-time user with no stored value.
-    var scaleFactor: Double {
-        let stored = UserDefaults.standard.integer(forKey: Sensitivity.defaultsKey)
-        let pct = stored > 0 ? stored : Sensitivity.defaultPct
-        return Double(pct) / 100.0
-    }
 
     init() { }
 
@@ -226,9 +210,11 @@ class DeviceMonitor {
         self.device = device
         isConnected = true
         firstReportLogged = false  // re-log first report after a transport switch
-        // Drop any residual sub-pixel remainder from the previous transport
-        // so a switch doesn't emit a phantom pixel later.
+        // Drop any residual sub-pixel remainder and stale velocity from the
+        // previous transport so a switch doesn't emit a phantom pixel or
+        // carry an old EMA into the first new tick.
         pixelAccumY = 0; pixelAccumX = 0
+        wheelCurve.reset(); hpanCurve.reset()
         onConnectionChanged?(true)
     }
 
@@ -271,9 +257,9 @@ class DeviceMonitor {
         let wheelTicks = Int16(bitPattern: UInt16(report[1]) | (UInt16(report[2]) << 8))
         let hpanTicks  = Int16(bitPattern: UInt16(report[3]) | (UInt16(report[4]) << 8))
 
-        let scale = scaleFactor
-        pixelAccumY += Double(wheelTicks) * scale
-        pixelAccumX += Double(hpanTicks) * scale
+        let now = CFAbsoluteTimeGetCurrent()
+        pixelAccumY += wheelCurve.scale(ticks: Int(wheelTicks), now: now)
+        pixelAccumX += hpanCurve.scale(ticks: Int(hpanTicks), now: now)
 
         let emitY = pixelAccumY.rounded(.towardZero)
         let emitX = pixelAccumX.rounded(.towardZero)

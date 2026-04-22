@@ -2,7 +2,6 @@
 //
 // Status bar item with a dropdown menu containing:
 // - Device connection status
-// - Sensitivity slider (1-500%, persisted to UserDefaults)
 // - Quit button
 //
 // Uses AppKit (NSMenu, NSStatusItem) directly — no SwiftUI dependency,
@@ -17,8 +16,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Menu items we need to update dynamically.
     private var statusMenuItem: NSMenuItem!
-    private var sliderMenuItem: NSMenuItem!
-    private var valueLabel: NSTextField!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         log.notice("Startup: pid=\(ProcessInfo.processInfo.processIdentifier, privacy: .public)")
@@ -57,13 +54,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(statusMenuItem)
         menu.addItem(NSMenuItem.separator())
 
-        // -- Sensitivity slider --
-        let sliderView = makeSliderView()
-        sliderMenuItem = NSMenuItem()
-        sliderMenuItem.view = sliderView
-        menu.addItem(sliderMenuItem)
-        menu.addItem(NSMenuItem.separator())
-
         // -- Quit --
         let quitItem = NSMenuItem(title: "Quit BoDial", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -77,48 +67,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         updateStatusDisplay()
         log.notice("Running. Menu bar icon installed.")
-    }
-
-    // Builds the slider + label view embedded in the menu.
-    private func makeSliderView() -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 50))
-
-        let label = NSTextField(labelWithString: "Sensitivity:")
-        label.frame = NSRect(x: 16, y: 28, width: 80, height: 16)
-        label.font = NSFont.systemFont(ofSize: 12)
-
-        valueLabel = NSTextField(labelWithString: "")
-        valueLabel.frame = NSRect(x: 190, y: 28, width: 44, height: 16)
-        valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        valueLabel.alignment = .right
-
-        let stored = UserDefaults.standard.integer(forKey: Sensitivity.defaultsKey)
-        let initial = stored > 0 ? stored : Sensitivity.defaultPct
-
-        let slider = NSSlider(value: Double(initial),
-                              minValue: Double(Sensitivity.min),
-                              maxValue: Double(Sensitivity.max),
-                              target: self, action: #selector(sliderChanged(_:)))
-        slider.frame = NSRect(x: 16, y: 4, width: 218, height: 24)
-        slider.isContinuous = true
-
-        container.addSubview(label)
-        container.addSubview(valueLabel)
-        container.addSubview(slider)
-
-        updateValueLabel(initial)
-
-        return container
-    }
-
-    @objc private func sliderChanged(_ sender: NSSlider) {
-        let value = Int(sender.doubleValue)
-        UserDefaults.standard.set(value, forKey: Sensitivity.defaultsKey)
-        updateValueLabel(value)
-    }
-
-    private func updateValueLabel(_ value: Int) {
-        valueLabel.stringValue = "\(value)%"
     }
 
     private func updateStatusDisplay() {

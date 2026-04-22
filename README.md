@@ -2,7 +2,7 @@
 
 macOS companion app for the [Engineer Bo Full Scroll Dial](https://www.engineerbo.com/) — a high-resolution USB/Bluetooth rotary encoder.
 
-BoDial takes exclusive ownership of the dial and delivers smooth per-pixel scroll events at a sensitivity you control. The OS's default interpretation of the dial as a standard mouse wheel makes it unusably sensitive (a light touch scrolls pages); BoDial replaces that with a direct tick-to-pixel mapping.
+BoDial takes exclusive ownership of the dial and delivers smooth per-pixel scroll events with velocity-based acceleration: slow turns stay pixel-precise (1 tick → 1 pixel), faster spins amplify automatically so long scrolls don't require winding forever. The OS's default interpretation of the dial as a standard mouse wheel makes it unusably sensitive (a light touch scrolls pages); BoDial replaces that with an adaptive curve tuned for the dial's resolution.
 
 ## Install
 
@@ -16,17 +16,13 @@ On first launch:
 
 ## Use
 
-Click the dial icon in the menu bar.
-
-- **Sensitivity slider** — pixels per dial tick × 100. `100%` is 1 tick → 1 pixel (the baseline). `500%` amplifies to 5 px/tick; `1%` attenuates to 0.01 px/tick with sub-pixel accumulation so slow turns still eventually produce whole-pixel scrolls.
-- **Default**: 100%.
-- Setting is saved across launches.
+Click the dial icon in the menu bar — it shows connection status and a Quit button. There's nothing to tune: scaling is automatic based on how fast you're spinning.
 
 Other mice and trackpads are unaffected — BoDial only emits events for the dial itself.
 
 ## How it works
 
-BoDial seizes the dial via `IOHIDManagerOpen(kIOHIDOptionsTypeSeizeDevice)`, which stops the OS HID driver from generating any scroll events for it. The app parses the dial's raw HID reports, scales each tick by the sensitivity setting (with a sub-pixel remainder carried across reports), and posts pixel-unit `CGEvent`s at the session tap point with `isContinuous=1`, no scroll-phase lifecycle. That combination gives apps smooth per-pixel scrolling without the gesture-capture behavior that locks scroll delivery to a single window mid-spin.
+BoDial seizes the dial via `IOHIDManagerOpen(kIOHIDOptionsTypeSeizeDevice)`, which stops the OS HID driver from generating any scroll events for it. The app parses the dial's raw HID reports and maps each tick through a velocity-based acceleration curve: below ~40 ticks/sec output stays 1:1 (pixel-precise slow scrolling), above that the multiplier grows as `(velocity / threshold)^1.5` and caps at 12×. Velocity is smoothed with an exponential moving average so the scale doesn't twitch on per-report jitter, and sub-pixel remainders are carried across reports so even heavily attenuated input eventually crosses pixel boundaries. Output is posted as pixel-unit `CGEvent`s at the session tap point with `isContinuous=1` and no scroll-phase lifecycle — giving apps smooth per-pixel scrolling without the gesture-capture behavior that locks scroll delivery to a single window mid-spin.
 
 When BoDial exits — cleanly or via crash — the Mach ports are released and the OS driver resumes. The dial reverts to its too-sensitive default until BoDial is relaunched.
 
