@@ -4,6 +4,8 @@ macOS companion app for the [Engineer Bo Full Scroll Dial](https://www.engineerb
 
 BoDial takes exclusive ownership of the dial and delivers smooth per-pixel scroll events with velocity-based acceleration: slow turns stay pixel-precise (1 tick → 1 pixel), faster spins amplify automatically so long scrolls don't require winding forever. The OS's default interpretation of the dial as a standard mouse wheel makes it unusably sensitive (a light touch scrolls pages); BoDial replaces that with an adaptive curve tuned for the dial's resolution.
 
+A linear mode (with an adjustable 1%–500% gain) is available for users who prefer predictable fixed scaling, and direction can be inverted per-device.
+
 ## Install
 
 Download the latest `.zip` from [Releases](https://github.com/ibullard/BoDial/releases), unzip, and drag `BoDial.app` to Applications.
@@ -16,9 +18,13 @@ On first launch:
 
 ## Use
 
-Click the dial icon in the menu bar — it shows connection status and a Quit button. There's nothing to tune: scaling is automatic based on how fast you're spinning.
+Click the dial icon in the menu bar. By default, scaling is automatic (velocity acceleration) and there's nothing to tune. The menu also exposes:
 
-Other mice and trackpads are unaffected — BoDial only emits events for the dial itself.
+- **Scrolling mode** — *Velocity acceleration* (default) or *Linear*. Linear uses a fixed gain with no velocity tracking.
+- **Linear gain** — 1%–500% slider, applied live as you drag. Only affects linear mode.
+- **Invert direction** — per-device scroll-direction flip, independent of the system "Natural scrolling" setting.
+
+Settings persist across launches. Other mice and trackpads are unaffected — BoDial only emits events for the dial itself.
 
 ## How it works
 

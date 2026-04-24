@@ -47,10 +47,27 @@ class DeviceMonitor {
     private var wheelCurve = ScrollCurve()
     private var hpanCurve = ScrollCurve()
 
+    // Flip the sign of the final emitted pixel delta. Applied after
+    // sub-pixel rounding so toggling mid-scroll doesn't corrupt the
+    // accumulator.
+    var invertDirection: Bool = false
+
     // Called when connection state changes (for UI updates).
     var onConnectionChanged: ((Bool) -> Void)?
 
     init() { }
+
+    // Forward a mode change to both axis curves.
+    func setMode(_ mode: ScrollCurve.Mode) {
+        wheelCurve.mode = mode
+        hpanCurve.mode = mode
+    }
+
+    // Forward a linear-mode gain change to both axis curves.
+    func setLinearGain(_ gain: Double) {
+        wheelCurve.linearGain = gain
+        hpanCurve.linearGain = gain
+    }
 
     func start() {
         log.notice("DeviceMonitor.start: creating HID manager")
@@ -271,7 +288,8 @@ class DeviceMonitor {
             return
         }
 
-        emitScrollEvent(pixelY: Int32(emitY), pixelX: Int32(emitX))
+        let sign: Double = invertDirection ? -1 : 1
+        emitScrollEvent(pixelY: Int32(emitY * sign), pixelX: Int32(emitX * sign))
     }
 
     // Construct and post a pixel-unit scroll CGEvent at the current cursor.

@@ -12,6 +12,19 @@ import Foundation
 import CoreFoundation
 
 struct ScrollCurve {
+    enum Mode {
+        case velocity
+        case linear
+    }
+
+    // Scaling mode. Velocity (default) runs the full acceleration curve.
+    // Linear returns `ticks * linearGain` with no velocity tracking.
+    var mode: Mode = .velocity
+
+    // Multiplier applied in linear mode. 1.0 = 1 tick per pixel (100%).
+    // Range is clamped by the UI to 0.01..5.0 (1%..500%).
+    var linearGain: Double = 1.0
+
     // Ticks/sec at or below this are treated as 1:1. Raising the threshold
     // widens the "slow = precise" zone; lowering it makes the curve kick
     // in sooner.
@@ -41,6 +54,10 @@ struct ScrollCurve {
     // The caller owns sub-pixel accumulation and rounding.
     mutating func scale(ticks: Int, now: CFAbsoluteTime) -> Double {
         if ticks == 0 { return 0 }
+
+        if mode == .linear {
+            return Double(ticks) * linearGain
+        }
 
         let dt = now - lastReportTime
         lastReportTime = now
