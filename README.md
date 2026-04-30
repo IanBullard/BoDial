@@ -6,6 +6,16 @@ BoDial takes exclusive ownership of the dial and delivers smooth per-pixel scrol
 
 A linear mode (with an adjustable 1%–500% gain) is available for users who prefer predictable fixed scaling, and direction can be inverted per-device.
 
+## Device button
+
+In addition to the wheel, the dial has a button, a power switch, and a USB-C port. Firmware recognizes three gestures on the button:
+
+- **Tap** — cycle through built-in sensitivity presets.
+- **Hold 3 s** — toggle scroll direction.
+- **Hold 5 s** — wipe stored Bluetooth bonds (recovery only; needed if pairing gets stuck).
+
+These gestures are firmware-side; the host sees only an undifferentiated button-down/up event. BoDial cannot read or change the device's current sensitivity preset or direction setting, and BoDial's own scroll scaling is applied on top of whatever ticks the firmware reports.
+
 ## Install
 
 Download the latest `.zip` from [Releases](https://github.com/ibullard/BoDial/releases), unzip, and drag `BoDial.app` to Applications.
@@ -31,6 +41,20 @@ Settings persist across launches. Other mice and trackpads are unaffected — Bo
 BoDial seizes the dial via `IOHIDManagerOpen(kIOHIDOptionsTypeSeizeDevice)`, which stops the OS HID driver from generating any scroll events for it. The app parses the dial's raw HID reports and maps each tick through a velocity-based acceleration curve: below ~40 ticks/sec output stays 1:1 (pixel-precise slow scrolling), above that the multiplier grows as `(velocity / threshold)^1.5` and caps at 12×. Velocity is smoothed with an exponential moving average so the scale doesn't twitch on per-report jitter, and sub-pixel remainders are carried across reports so even heavily attenuated input eventually crosses pixel boundaries. Output is posted as pixel-unit `CGEvent`s at the session tap point with `isContinuous=1` and no scroll-phase lifecycle — giving apps smooth per-pixel scrolling without the gesture-capture behavior that locks scroll delivery to a single window mid-spin.
 
 When BoDial exits — cleanly or via crash — the Mach ports are released and the OS driver resumes. The dial reverts to its too-sensitive default until BoDial is relaunched.
+
+## HID interface
+
+Identity: VID `0xFEED`, PID `0xBEEF`, "Engineer Bo / Full Scroll Dial". Same descriptor and report layout over USB and BLE; 125 Hz polling (`ReportInterval` = 8 ms). Firmware versions differ by transport (USB `bcdDevice` 0x0307, BLE 0x0100).
+
+Reports declared by the device:
+
+| ID | Type | Payload | Notes |
+|----|------|---------|-------|
+| 1 | Input | 3 bytes: buttons (5 bits + 3 pad), X (i8), Y (i8) | Standard mouse layout. Five button bits declared, only one physical. BoDial ignores this report — the button is consumed by firmware-side gestures. |
+| 2 | Feature (R/W) | 1 byte: vert mult (2 b) + horiz mult (2 b) + 4 b pad | HID 1.11 *Resolution Multiplier* — host→device toggle for coarse vs. hi-res wheel reporting. BoDial does not touch it; the dial already emits 16-bit deltas. |
+| 3 | Input | 4 bytes: wheel (i16-LE), AC Pan (i16-LE) | The scroll data BoDial parses. |
+
+The firmware exposes no vendor-specific page and no settings reports. The button's three gestures (sensitivity cycle, direction toggle, Bluetooth bond wipe) live entirely in firmware; the host has no way to query the dial's current sensitivity preset or direction setting. Adding host visibility into firmware state would require a vendor-specific report in a future firmware revision.
 
 ## Build
 
